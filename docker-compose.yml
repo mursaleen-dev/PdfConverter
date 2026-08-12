@@ -1,0 +1,46 @@
+version: "3.8"
+
+services:
+  # Redis: message broker for Celery + result backend
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - pdf_tools
+
+  # Celery worker: processes async conversion tasks
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.celery
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      DATABASE_URL: sqlite:///./app.db
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    networks:
+      - pdf_tools
+    # Restart on failure
+    restart: on-failure
+
+  # (Optional) FastAPI backend runs separately with: uvicorn app.main:app --reload --port 8000
+  # (Optional) Frontend runs separately with: npm run dev
+
+volumes:
+  redis_data:
+
+networks:
+  pdf_tools:
+    driver: bridge

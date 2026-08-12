@@ -1,0 +1,39 @@
+# --- Python / backend ---
+backend/venv/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+backend/app.db
+backend/*.docx
+backend/*.pdf
+backend/tests/pdf_word_regression/output/
+
+# --- Node / frontend ---
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/tsconfig.tsbuildinfo
+
+# --- Env files (never commit real secrets/local paths) ---
+.env
+.env.local
+!.env.example
+!.env.local.example
+backend/.env
+frontend/.env.local
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+*.log
+
+# --- IDE / local tool cache ---
+.vs/
+.vscode/
+.claude/
+
+# --- Scratch / debug artifacts (LibreOffice profile dumps, test outputs) ---
+artifacts/
+test_input.pdf
+test_sejda.pdf
+

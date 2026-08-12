@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pillow
+pydantic-settings
+pymupdf
+pymupdf-fonts
+python-docx
+python-pptx
+openpyxl
+requests
+sqlalchemy[asyncio]
+alembic
+celery[redis]
+redis
