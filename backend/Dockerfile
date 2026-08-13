@@ -29,4 +29,8 @@ RUN chmod -R 777 /app /tmp
 
 # Apply database migrations (harmless no-op if already applied — SQLite
 # file lives in the container and resets on redeploy anyway) then serve.
-CMD alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7860}
+# `python -m alembic` (not the bare `alembic` command) so the current
+# directory (/app, containing the local `app` package that alembic/env.py
+# imports) is added to sys.path — a bare console-script invocation doesn't
+# do this and fails with "ModuleNotFoundError: No module named 'app'".
+CMD python -m alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7860}
