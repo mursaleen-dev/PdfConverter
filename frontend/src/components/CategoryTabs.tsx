@@ -1,4 +1,5 @@
 "use client";
+import { useI18n } from "@/lib/i18n";
 
 export type Category = "All" | "Convert PDF";
 
@@ -10,6 +11,7 @@ interface CategoryTabsProps {
 }
 
 export default function CategoryTabs({ active, onChange }: CategoryTabsProps) {
+  const { t } = useI18n();
   return (
     <div className="flex flex-wrap items-center justify-center gap-2">
       {CATEGORIES.map((category) => {
@@ -24,7 +26,7 @@ export default function CategoryTabs({ active, onChange }: CategoryTabsProps) {
                 : "border border-neutral-200 bg-white text-neutral-700 hover:border-neutral-300 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-300 dark:hover:bg-neutral-900"
             }`}
           >
-            {category}
+            {category === "All" ? t("common.all") : t("common.convertPdf")}
           </button>
         );
       })}

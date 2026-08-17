@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import type { Tool } from "@/lib/tools";
+import { useI18n } from "@/lib/i18n";
 
 interface ToolCardProps {
   tool: Tool;
@@ -7,6 +10,7 @@ interface ToolCardProps {
 
 export default function ToolCard({ tool }: ToolCardProps) {
   const Icon = tool.icon;
+  const { t, language } = useI18n();
 
   const iconEl = (
     <div
@@ -20,10 +24,10 @@ export default function ToolCard({ tool }: ToolCardProps) {
     <>
       {iconEl}
       <h3 className="mt-4 text-base font-semibold text-neutral-900 dark:text-neutral-50">
-        {tool.title}
+        {t(`tool.${tool.id}`, tool.title)}
       </h3>
       <p className="mt-1.5 text-sm leading-snug text-neutral-500 dark:text-neutral-400">
-        {tool.description}
+        {language === "en" ? tool.description : t("common.toolDescription")}
       </p>
     </>
   );
@@ -35,7 +39,7 @@ export default function ToolCard({ tool }: ToolCardProps) {
         className="group relative flex cursor-not-allowed flex-col rounded-2xl border border-neutral-200 bg-white p-5 opacity-70 dark:border-neutral-800 dark:bg-neutral-950"
       >
         <span className="absolute right-4 top-4 rounded-full bg-neutral-100 px-2.5 py-1 text-[11px] font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-          Coming Soon
+          {t("common.comingSoon", "Coming Soon")}
         </span>
         {body}
       </div>

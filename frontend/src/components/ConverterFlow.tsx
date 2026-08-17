@@ -8,6 +8,7 @@ import ProgressBar from "@/components/ProgressBar";
 import ConversionResult from "@/components/ConversionResult";
 import { convertFile, ConvertError } from "@/lib/api";
 import { MAX_FILE_SIZE_MB, isAcceptedFile } from "@/lib/constants";
+import { useI18n } from "@/lib/i18n";
 
 type Status = "idle" | "uploading" | "success" | "error";
 
@@ -45,6 +46,7 @@ export default function ConverterFlow({
     conversionModes?.[0]?.value ?? ""
   );
   const objectUrlRef = useRef<string | null>(null);
+  const { t, language } = useI18n();
 
   useEffect(() => {
     return () => {
@@ -110,19 +112,21 @@ export default function ConverterFlow({
           className="self-start inline-flex items-center gap-1 text-xs font-medium text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
-          Back to tools
+          {t("common.back")}
         </Link>
 
         <div className="text-center">
-          <h1 className="text-xl font-semibold">{title}</h1>
-          <p className="mt-1 text-sm text-neutral-500">{description}</p>
+          <h1 className="text-xl font-semibold">{t(`tool.${toolId}`, title)}</h1>
+          <p className="mt-1 text-sm text-neutral-500">
+            {language === "en" ? description : t("common.toolDescription")}
+          </p>
         </div>
 
         {status === "idle" && (
           <>
             {conversionModes && conversionModes.length > 0 && (
               <fieldset className="w-full">
-                <legend className="mb-2 text-sm font-medium">Conversion mode</legend>
+                <legend className="mb-2 text-sm font-medium">{t("common.mode")}</legend>
                 <div className="grid gap-2">
                   {conversionModes.map((mode) => {
                     const selected = conversionMode === mode.value;
@@ -162,7 +166,7 @@ export default function ConverterFlow({
 
         {status === "uploading" && (
           <div className="flex w-full flex-col items-center gap-3">
-            <p className="text-sm text-neutral-500">Converting...</p>
+            <p className="text-sm text-neutral-500">{t("common.converting")}</p>
             <ProgressBar percent={progress} />
           </div>
         )}
@@ -182,7 +186,7 @@ export default function ConverterFlow({
               onClick={reset}
               className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
             >
-              Try again
+              {t("common.tryAgain")}
             </button>
           </div>
         )}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 interface FileDropzoneProps {
   onFileSelected: (file: File) => void;
@@ -11,6 +12,7 @@ interface FileDropzoneProps {
 export default function FileDropzone({ onFileSelected, acceptedExtensions, disabled }: FileDropzoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { t } = useI18n();
 
   const handleFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -45,10 +47,10 @@ export default function FileDropzone({ onFileSelected, acceptedExtensions, disab
         onChange={(e) => handleFiles(e.target.files)}
       />
       <p className="text-sm font-medium">
-        Drag &amp; drop a file here, or click to browse
+        {t("common.drag")}
       </p>
       <p className="text-xs text-neutral-500">
-        Accepted: {acceptedExtensions.join(", ")}
+        {t("common.accepted")}: {acceptedExtensions.join(", ")}
       </p>
     </div>
   );
