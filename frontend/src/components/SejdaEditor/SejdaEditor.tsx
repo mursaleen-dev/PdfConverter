@@ -474,8 +474,10 @@ export default function SejdaEditor() {
       const x1 = Math.max(...targetSpans.map((s) => s.bbox[2]));
       // Stay inside the glyph box so the cover cannot white-out a table rule
       // that sits immediately under the cell value.
-      const y0 = Math.min(...targetSpans.map((s) => s.bbox[1]));
-      const y1 = Math.max(...targetSpans.map((s) => s.bbox[3]));
+      const rawY0 = Math.min(...targetSpans.map((s) => s.bbox[1]));
+      const rawY1 = Math.max(...targetSpans.map((s) => s.bbox[3]));
+      const y0 = rawY0 + 0.4;
+      const y1 = Math.max(y0 + 0.5, rawY1 - 0.7);
       const key = (activeSingleSpan
         ? (activeSingleSpan.memberSpanIds ?? [activeSingleSpan.spanId])
         : activeParaForEdit.spanIds

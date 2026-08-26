@@ -31,6 +31,9 @@ from app.routers.text_edit import (
     _build_span_lookup,
     _line_rect_from_span_ids,
     _clamp_rect_above_rules,
+    _clamp_paint_rect,
+    _thin_horizontal_strokes,
+    apply_text_edits,
     _tokenize,
     SHRINK_MIN_S,
     SHRINK_STEP,
@@ -245,6 +248,72 @@ class TestSpanIdResolution:
         rect = [40.0, 90.0, 90.0, 100.0]
         clamped = _clamp_rect_above_rules(rect, [(200.0, 300.0, 98.4)])
         assert clamped[3] == rect[3]
+
+    def test_clamp_stops_below_rule_above_text(self):
+        rect = [40.0, 90.0, 90.0, 100.0]
+        clamped = _clamp_rect_above_rules(rect, [(30.0, 120.0, 90.2)])
+        assert clamped[1] > 90.2
+
+    def test_cell_rectangle_edges_are_table_rules(self):
+        doc = fitz.open()
+        page = doc.new_page(width=400, height=300)
+        page.draw_rect(fitz.Rect(40, 80, 360, 112), color=(0, 0, 0), width=0.8)
+        strokes = _thin_horizontal_strokes(page)
+        ys = [round(y, 1) for _, _, y in strokes]
+        assert 80.0 in ys
+        assert 112.0 in ys
+        doc.close()
+
+    def test_paint_rect_stays_inside_table_cell(self):
+        doc = fitz.open()
+        page = doc.new_page(width=400, height=300)
+        page.draw_rect(fitz.Rect(40, 80, 360, 112), color=(0, 0, 0), width=0.8)
+        strokes = _thin_horizontal_strokes(page)
+        # Expanded descender box that would otherwise cover the bottom rule.
+        clamped = _clamp_paint_rect([50.0, 82.0, 200.0, 113.0], page, strokes)
+        assert clamped[3] < 112.0
+        assert clamped[1] > 80.0
+        doc.close()
+
+    def test_edit_does_not_erase_cell_border(self):
+        orig = fitz.open()
+        page = orig.new_page(width=400, height=300)
+        page.draw_rect(fitz.Rect(40, 80, 360, 112), color=(0, 0, 0), width=1.0)
+        page.insert_text(fitz.Point(50, 100), "ApplicantValue", fontsize=11)
+        raw = orig.tobytes()
+        orig.close()
+        orig = fitz.open(stream=raw, filetype="pdf")
+        rebuilt = fitz.open(stream=raw, filetype="pdf")
+        apply_text_edits(
+            rebuilt,
+            orig,
+            {"p0": 0},
+            [{"pageId": "p0", "sourceIndex": 0}],
+            [{
+                "pageId": "p0",
+                "spanIds": ["p0:0:0:0"],
+                "newText": [{"text": "New Name", "sizeScale": 1.0, "color": "#000000"}],
+                "overflowPolicy": "overflow",
+            }],
+        )
+        assert "New Name" in rebuilt[0].get_text()
+        pix = rebuilt[0].get_pixmap(
+            matrix=fitz.Matrix(3, 3),
+            clip=fitz.Rect(90, 110, 140, 114),
+            colorspace=fitz.csRGB,
+        )
+        dark = False
+        for y in range(pix.height):
+            for x in range(pix.width):
+                r, g, b = pix.pixel(x, y)[:3]
+                if r < 80 and g < 80 and b < 80:
+                    dark = True
+                    break
+            if dark:
+                break
+        assert dark, "bottom table rule should still be visible after the edit"
+        orig.close()
+        rebuilt.close()
 
     def test_single_span_redaction_does_not_cover_neighbor(self):
         raw = self._make_rawdict("p1")

@@ -228,9 +228,13 @@ def _point_xy(value: Any) -> tuple[float, float] | None:
         return None
 
 
+_TABLE_INSET_PT = 0.8
+
+
 def _thin_horizontal_strokes(page: fitz.Page) -> list[tuple[float, float, float]]:
-    """Return (x0, x1, y) for thin horizontal line-art such as table rules."""
+    """Return (x0, x1, y) for table rules: hairlines and cell rectangle edges."""
     strokes: list[tuple[float, float, float]] = []
+    page_area = float(page.rect.width * page.rect.height) or 1.0
     try:
         drawings = page.get_drawings()
     except Exception:
@@ -255,10 +259,22 @@ def _thin_horizontal_strokes(page: fitz.Page) -> list[tuple[float, float, float]
                     rect = fitz.Rect(item[1])
                 except Exception:
                     continue
-                if rect.height > 1.5:
+                if rect.width < 1.0:
                     continue
-                y = (rect.y0 + rect.y1) / 2
+                if rect.width * rect.height > page_area * 0.45:
+                    continue
+                if rect.height <= 1.5:
+                    y = (rect.y0 + rect.y1) / 2
+                    x0, x1 = float(rect.x0), float(rect.x1)
+                    if x1 - x0 >= 1.0:
+                        strokes.append((x0, x1, y))
+                    continue
+                # Full table cells: the stroked/filled rectangle *is* the grid.
+                # Record both horizontal edges so paint cannot cover them.
                 x0, x1 = float(rect.x0), float(rect.x1)
+                strokes.append((x0, x1, float(rect.y0)))
+                strokes.append((x0, x1, float(rect.y1)))
+                continue
             else:
                 continue
             if x1 - x0 < 1.0:
@@ -267,20 +283,82 @@ def _thin_horizontal_strokes(page: fitz.Page) -> list[tuple[float, float, float]
     return strokes
 
 
+def _containing_cell_rect(
+    page: fitz.Page,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+) -> fitz.Rect | None:
+    """Smallest drawing rectangle that fully contains the text box (a table cell)."""
+    center_x = (x0 + x1) / 2
+    center_y = (y0 + y1) / 2
+    page_area = float(page.rect.width * page.rect.height) or 1.0
+    candidates: list[fitz.Rect] = []
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        return None
+    for drawing in drawings:
+        for item in drawing.get("items", []):
+            if not item or item[0] != "re" or len(item) < 2:
+                continue
+            try:
+                rect = fitz.Rect(item[1])
+            except Exception:
+                continue
+            if rect.width < 8 or rect.height < 6:
+                continue
+            if rect.width * rect.height > page_area * 0.45:
+                continue
+            if rect.x0 - 1 <= center_x <= rect.x1 + 1 and rect.y0 - 1 <= center_y <= rect.y1 + 1:
+                candidates.append(rect)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda rect: rect.width * max(rect.height, 1))
+
+
 def _clamp_rect_above_rules(
     rect: list[float],
     strokes: list[tuple[float, float, float]],
 ) -> list[float]:
-    """Keep redaction/paint from eating a table rule sitting under the text."""
+    """Keep redaction/paint from eating a table rule sitting under or above the text."""
     x0, y0, x1, y1 = rect
-    limit = y1
+    mid = (y0 + y1) / 2
+    top_limit = y0
+    bot_limit = y1
     for sx0, sx1, y in strokes:
-        if y < y0 + 1 or y > y1 + 2:
+        if y < y0 - 2 or y > y1 + 2:
             continue
         if sx1 < x0 - 1 or sx0 > x1 + 1:
             continue
-        limit = min(limit, y - 0.7)
-    return [x0, y0, x1, max(y0 + 0.5, limit)]
+        if y >= mid:
+            bot_limit = min(bot_limit, y - 0.7)
+        else:
+            top_limit = max(top_limit, y + 0.7)
+    if bot_limit < top_limit + 0.5:
+        bot_limit = top_limit + 0.5
+    return [x0, top_limit, x1, bot_limit]
+
+
+def _clamp_paint_rect(
+    rect: list[float],
+    page: fitz.Page,
+    strokes: list[tuple[float, float, float]],
+) -> list[float]:
+    """Inset to the table cell, then keep off detected row/column rules."""
+    x0, y0, x1, y1 = rect
+    cell = _containing_cell_rect(page, x0, y0, x1, y1)
+    if cell is not None:
+        x0 = max(x0, float(cell.x0) + _TABLE_INSET_PT)
+        y0 = max(y0, float(cell.y0) + _TABLE_INSET_PT)
+        x1 = min(x1, float(cell.x1) - _TABLE_INSET_PT)
+        y1 = min(y1, float(cell.y1) - _TABLE_INSET_PT)
+        if x1 < x0 + 0.5:
+            x1 = x0 + 0.5
+        if y1 < y0 + 0.5:
+            y1 = y0 + 0.5
+    return _clamp_rect_above_rules([x0, y0, x1, y1], strokes)
 
 
 def _writable_horizontal_bounds(
@@ -760,7 +838,7 @@ def apply_text_edits(
             type3_resource_xrefs = snapshot_type3_resources(new_page, needed_type3)
 
         strokes = _thin_horizontal_strokes(new_page) if redact_rects else []
-        redact_rects = [_clamp_rect_above_rules(rect, strokes) for rect in redact_rects]
+        redact_rects = [_clamp_paint_rect(rect, new_page, strokes) for rect in redact_rects]
         bg_by_rect = [
             _sample_bg_rgb(new_page, fitz.Rect(rect))
             for rect in redact_rects
