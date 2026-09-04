@@ -15,6 +15,29 @@ if (typeof window !== "undefined") {
 // before sending them to the backend (fontSizePt = fontSizePx / PDF_RENDER_SCALE).
 export const PDF_RENDER_SCALE = 1.4;
 
+/** Options that keep pdf.js from substituting OS fonts for embedded/Type3 faces. */
+export const PDF_DOCUMENT_OPTIONS = {
+  useSystemFonts: false,
+} as const;
+
+export function canvasOutputScale(): number {
+  if (typeof window === "undefined") return 1;
+  return Math.min(window.devicePixelRatio || 1, 3);
+}
+
+export function sizeCanvasForViewport(
+  canvas: HTMLCanvasElement,
+  cssWidth: number,
+  cssHeight: number,
+): number {
+  const outputScale = canvasOutputScale();
+  canvas.width = Math.max(1, Math.floor(cssWidth * outputScale));
+  canvas.height = Math.max(1, Math.floor(cssHeight * outputScale));
+  canvas.style.width = `${cssWidth}px`;
+  canvas.style.height = `${cssHeight}px`;
+  return outputScale;
+}
+
 export interface RenderedPageSize {
   width: number;
   height: number;
@@ -27,7 +50,7 @@ export interface PageRenderHandle {
 
 export async function loadPdf(file: File): Promise<PDFDocumentProxy> {
   const buffer = await file.arrayBuffer();
-  const loadingTask = pdfjsLib.getDocument({ data: buffer });
+  const loadingTask = pdfjsLib.getDocument({ data: buffer, ...PDF_DOCUMENT_OPTIONS });
   return loadingTask.promise;
 }
 
@@ -45,8 +68,12 @@ export function renderPageToCanvas(
     if (cancelled) throw new Error("cancelled");
 
     const viewport = page.getViewport({ scale });
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
+    const outputScale = sizeCanvasForViewport(canvas, viewport.width, viewport.height);
+    const renderViewport = outputScale === 1
+      ? viewport
+      : page.getViewport({ scale: scale * outputScale });
+    canvas.width = renderViewport.width;
+    canvas.height = renderViewport.height;
 
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Could not get canvas 2D context");
@@ -54,7 +81,7 @@ export function renderPageToCanvas(
     // intent: "print" disables pdf.js's requestAnimationFrame-driven render
     // scheduling (used for the default "display" intent), which never fires
     // in some sandboxed/background browser tabs and would hang forever.
-    renderTask = page.render({ canvasContext: context, viewport, canvas, intent: "print" });
+    renderTask = page.render({ canvasContext: context, viewport: renderViewport, canvas, intent: "print" });
     await renderTask.promise;
     return { width: viewport.width, height: viewport.height };
   })();

@@ -1,19 +1,19 @@
-import type { Metadata } from "next";
 import ConverterFlow from "@/components/ConverterFlow";
+import ToolPageShell from "@/components/ToolPageShell";
+import { toolPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "JPG to PDF",
-  description: "Convert JPG images to PDF in seconds.",
-};
+export const metadata = toolPageMetadata("jpg-to-pdf");
 
 export default function JpgToPdfPage() {
   return (
-    <ConverterFlow
-      toolId="jpg-to-pdf"
-      title="JPG to PDF"
-      description="Convert a JPG image to PDF"
-      acceptedExtensions={[".jpg", ".jpeg"]}
-      unsupportedMessage="Unsupported file type. Please choose a JPG or JPEG file."
-    />
+    <ToolPageShell toolId="jpg-to-pdf">
+      <ConverterFlow
+        toolId="jpg-to-pdf"
+        title="JPG to PDF"
+        description="Convert a JPG image to PDF"
+        acceptedExtensions={[".jpg", ".jpeg"]}
+        unsupportedMessage="Unsupported file type. Please choose a JPG or JPEG file."
+      />
+    </ToolPageShell>
   );
 }

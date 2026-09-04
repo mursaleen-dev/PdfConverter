@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useImperativeHandle, forwardRef } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
+import { sizeCanvasForViewport } from "@/lib/pdfRender";
 import {
   Canvas as FabricCanvas,
   IText,
@@ -102,10 +103,14 @@ const FabricPage = forwardRef<FabricPageHandle, FabricPageProps>(function Fabric
     const canvas = pdfCanvasRef.current;
     if (!canvas) return;
     const viewport = pdfPage.getViewport({ scale, rotation: userRotation });
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
+    const outputScale = sizeCanvasForViewport(canvas, viewport.width, viewport.height);
+    const renderViewport = outputScale === 1
+      ? viewport
+      : pdfPage.getViewport({ scale: scale * outputScale, rotation: userRotation });
+    canvas.width = renderViewport.width;
+    canvas.height = renderViewport.height;
     const ctx = canvas.getContext("2d")!;
-    const task = pdfPage.render({ canvasContext: ctx, viewport, intent: "print" } as Parameters<typeof pdfPage.render>[0]);
+    const task = pdfPage.render({ canvasContext: ctx, viewport: renderViewport, intent: "print" } as Parameters<typeof pdfPage.render>[0]);
     return () => { task.cancel(); };
   }, [pdfPage, scale, userRotation]);
 

@@ -1,11 +1,13 @@
-import type { Metadata } from "next";
 import MergeFlow from "@/components/MergeFlow";
+import ToolPageShell from "@/components/ToolPageShell";
+import { toolPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "Merge PDF",
-  description: "Combine multiple PDF files into one document.",
-};
+export const metadata = toolPageMetadata("merge-pdf");
 
 export default function MergePdfPage() {
-  return <MergeFlow />;
+  return (
+    <ToolPageShell toolId="merge-pdf">
+      <MergeFlow />
+    </ToolPageShell>
+  );
 }

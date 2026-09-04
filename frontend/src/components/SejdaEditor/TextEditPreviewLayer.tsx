@@ -1,6 +1,7 @@
 "use client";
 
 import type { TextRun } from "./types";
+import { cssFontStack, cssFontWeight } from "./previewFonts";
 
 export interface TextEditPreview {
   key: string;       // spanIds.join(",") — stable identity for the edit
@@ -13,6 +14,7 @@ export interface TextEditPreview {
   fontName: string;
   bold: boolean;
   italic: boolean;
+  fontWeight?: number;
   isLtr: boolean;
   backgroundColor: string;
 }
@@ -79,7 +81,7 @@ export default function TextEditPreviewLayer({
         const fontSizePx = p.fontSize * scale;
         const text = p.runs.map((r) => r.text).join("");
         const color = p.runs[0]?.color ?? "#000000";
-        const family = p.fontName.replace(/^[A-Z]{6}\+/, "");
+        const family = cssFontStack(p.fontName);
 
         return (
           <div key={p.key}>
@@ -109,12 +111,12 @@ export default function TextEditPreviewLayer({
                 y={ins.y}
                 fill={color}
                 fontSize={fontSizePx}
-                fontFamily={`"${family}", Arial, sans-serif`}
-                fontWeight={p.bold ? 700 : 400}
+                fontFamily={family}
+                fontWeight={cssFontWeight(p)}
                 fontStyle={p.italic ? "italic" : "normal"}
                 direction={p.isLtr ? "ltr" : "rtl"}
                 textAnchor="start"
-                style={{ whiteSpace: "pre", userSelect: "none", textDecoration: "none" }}
+                style={{ whiteSpace: "pre", userSelect: "none", textDecoration: "none", fontSynthesis: "none" }}
                 transform={userRotation ? `rotate(${userRotation} ${ins.x} ${ins.y})` : undefined}
               >
                 {text}

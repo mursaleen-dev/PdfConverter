@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from app.converters.office_converter import convert_office_to_pdf
+from app.utils.html_localize import localize_html_resources
 from app.utils.ssrf import safe_fetch_html
 from app.utils.tempdir import cleanup_dir, scratch_dir
 
@@ -22,6 +23,8 @@ async def convert_url(payload: ConvertUrlRequest) -> FileResponse:
 
     with scratch_dir() as tmp_dir:
         try:
+            assets_dir = tmp_dir / "assets"
+            html_bytes = localize_html_resources(html_bytes, payload.url, assets_dir)
             input_path = tmp_dir / f"{uuid.uuid4().hex}.html"
             input_path.write_bytes(html_bytes)
             result = convert_office_to_pdf(input_path, tmp_dir)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import fitz
@@ -22,7 +23,11 @@ from app.font_resolver import (
     _base14_name,
     _ubuntu_fontname,
     _guess_family,
+    _try_system_font,
+    css_weight,
+    display_family,
     resolve_font,
+    source_face_style,
 )
 from app.routers.text_edit import (
     _runs_total_width,
@@ -33,6 +38,7 @@ from app.routers.text_edit import (
     _clamp_rect_above_rules,
     _clamp_paint_rect,
     _thin_horizontal_strokes,
+    _sample_bg_rgb,
     apply_text_edits,
     _tokenize,
     SHRINK_MIN_S,
@@ -315,6 +321,53 @@ class TestSpanIdResolution:
         orig.close()
         rebuilt.close()
 
+    def test_heading_fill_is_not_replaced_with_white(self):
+        grey = (216 / 255, 216 / 255, 216 / 255)
+        orig = fitz.open()
+        page = orig.new_page(width=400, height=300)
+        page.draw_rect(fitz.Rect(40, 80, 360, 112), color=(0, 0, 0), fill=grey, width=1.0)
+        page.insert_text(fitz.Point(50, 100), "Visit Details", fontsize=12)
+        raw = orig.tobytes()
+        orig.close()
+        orig = fitz.open(stream=raw, filetype="pdf")
+        rebuilt = fitz.open(stream=raw, filetype="pdf")
+        sampled = _sample_bg_rgb(orig[0], fitz.Rect(50, 88, 140, 108))
+        assert all(abs(channel - 216 / 255) < 0.05 for channel in sampled)
+        from app.routers.extract import extract_page_data
+
+        data = extract_page_data(orig[0], "p0", 0)
+        heading = next(
+            span
+            for para in data["paragraphs"]
+            for line in para["lines"]
+            for span in line["spans"]
+            if "Visit Details" in span["text"]
+        )
+        assert heading["backgroundColor"].lower() == "#d8d8d8"
+        apply_text_edits(
+            rebuilt,
+            orig,
+            {"p0": 0},
+            [{"pageId": "p0", "sourceIndex": 0}],
+            [{
+                "pageId": "p0",
+                "spanIds": ["p0:0:0:0"],
+                "newText": [{"text": "Visit Details Was", "sizeScale": 1.0, "color": "#000000"}],
+                "overflowPolicy": "overflow",
+            }],
+        )
+        assert "Visit Details Was" in rebuilt[0].get_text()
+        pix = rebuilt[0].get_pixmap(
+            matrix=fitz.Matrix(3, 3),
+            clip=fitz.Rect(250, 90, 300, 104),
+            colorspace=fitz.csRGB,
+        )
+        r, g, b = pix.pixel(pix.width // 2, pix.height // 2)[:3]
+        assert r < 240 and g < 240 and b < 240, "heading fill must not become white"
+        assert abs(r - 216) < 25
+        orig.close()
+        rebuilt.close()
+
     def test_single_span_redaction_does_not_cover_neighbor(self):
         raw = self._make_rawdict("p1")
         rects = _line_rect_from_span_ids(["p1:0:0:0"], raw)
@@ -427,5 +480,74 @@ class TestResolveFontIntegration:
         res = resolve_font(doc, page, "NonExistentFont", False, False, "ملك")
         assert res.tier == "C"
         assert res.css_family == "FiraGO"
+        doc.close()
+
+    def test_system_family_used_when_subset_is_incomplete(self):
+        res = _try_system_font("Noto Sans", True, False, "LHR", 700)
+        if res is None:
+            pytest.skip("Noto Sans Bold is not installed on this machine")
+        assert res.tier == "A"
+        assert "noto" in res.css_family.lower()
+        assert res.fontbuffer
+        font = fitz.Font(fontbuffer=res.fontbuffer)
+        assert _all_glyphs_present(font, "LHR")
+
+    def test_generic_names_do_not_steal_system_fonts(self):
+        doc, page = make_simple_pdf("Hello")
+        res = resolve_font(doc, page, "Helvetica", False, False, "Hello")
+        assert res.tier in ("B", "C")
+        doc.close()
+
+    def test_pdf_style_name_finds_system_family(self):
+        res = _try_system_font("ABCDEF+NotoSans-Regular", True, False, "LHR", 700)
+        if res is None:
+            pytest.skip("Noto Sans Bold is not installed on this machine")
+        assert res.tier == "A"
+        assert "noto" in res.css_family.lower()
+
+    def test_display_family_strips_subset_and_style(self):
+        assert display_family("ABCDEF+NotoSans-Regular") == "Noto Sans"
+        assert display_family("Arial-BoldMT") == "Arial"
+        assert display_family("Noto Sans") == "Noto Sans"
+
+    def test_css_weight_keeps_medium_and_semibold(self):
+        assert css_weight(400) == 400
+        assert css_weight(500) == 500
+        assert css_weight(600) == 600
+        assert css_weight(700) == 700
+
+    def test_source_face_used_for_every_embedded_name(self):
+        itinerary = Path(r"c:\Users\Dell\Downloads\__ The Travel Itinerary-1.pdf")
+        if not itinerary.exists():
+            pytest.skip("itinerary sample PDF not present")
+        doc = fitz.open(itinerary)
+        page = doc[0]
+        bold_face = source_face_style(doc, page, "Type3 (12 0 R)")
+        regular_face = source_face_style(doc, page, "Type3 (10 0 R)")
+        assert bold_face.family == "Noto Sans"
+        assert bold_face.weight == 700
+        assert bold_face.bold
+        assert regular_face.family == "Noto Sans"
+        assert regular_face.weight == 400
+        assert not regular_face.bold
+        res = resolve_font(doc, page, "Type3 (12 0 R)", False, False, "LHR")
+        assert res.tier == "A"
+        assert "noto" in (res.css_family or res.fontname).lower()
+        doc.close()
+
+    def test_extract_sends_weighted_preview_fonts(self):
+        itinerary = Path(r"c:\Users\Dell\Downloads\__ The Travel Itinerary-1.pdf")
+        if not itinerary.exists():
+            pytest.skip("itinerary sample PDF not present")
+        from app.routers.extract import _extract_browser_fonts
+
+        doc = fitz.open(itinerary)
+        fonts = _extract_browser_fonts(doc[0])
+        assert isinstance(fonts, list)
+        pairs = {(item["family"], item["weight"]) for item in fonts}
+        assert ("Noto Sans", "700") in pairs
+        assert ("Noto Sans", "400") in pairs
+        for item in fonts:
+            assert item["src"].startswith("data:font/")
         doc.close()
 

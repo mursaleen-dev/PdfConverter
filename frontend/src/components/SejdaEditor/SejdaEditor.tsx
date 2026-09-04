@@ -39,6 +39,7 @@ import { SelectionToolbar, ContextMenu } from "./ObjectActionMenu";
 import {
   DEFAULT_TOOL_SETTINGS,
   type ActiveTool,
+  type EmbeddedFontFace,
   type ExtractedPage,
   type ExtractedParagraph,
   type ExtractedSpan,
@@ -51,6 +52,8 @@ import { useEditorState } from "./useEditorState";
 import { useTextExtract } from "./useTextExtract";
 import { applySejdaManifest, ConvertError } from "@/lib/api";
 import { MAX_FILE_SIZE_MB, isAcceptedFile } from "@/lib/constants";
+import { PDF_DOCUMENT_OPTIONS } from "@/lib/pdfRender";
+import { PREVIEW_FONT_PREFIX } from "./previewFonts";
 
 if (typeof window !== "undefined") {
   (window as unknown as { pdfjsWorker: unknown }).pdfjsWorker = pdfjsWorker;
@@ -64,19 +67,41 @@ const SCALE_STEP = 0.25;
 const loadedEmbeddedFonts = new Set<string>();
 const loadingEmbeddedFonts = new Map<string, Promise<void>>();
 
-async function loadEmbeddedFonts(fonts?: Record<string, string>): Promise<void> {
-  if (!fonts || typeof FontFace === "undefined") return;
-  await Promise.allSettled(Object.entries(fonts).map(async ([rawFamily, source]) => {
+function normalizeFontFaces(
+  fonts?: Record<string, string> | EmbeddedFontFace[],
+): EmbeddedFontFace[] {
+  if (!fonts) return [];
+  if (Array.isArray(fonts)) return fonts.filter((face) => face?.family && face?.src);
+  return Object.entries(fonts).map(([rawFamily, src]) => {
     const family = rawFamily.replace(/[^A-Za-z0-9 _-]/g, "").trim();
-    const cacheKey = `${family}:${source.length}:${source.slice(-24)}`;
-    if (!family || loadedEmbeddedFonts.has(cacheKey)) return;
+    const lower = family.toLowerCase();
+    return {
+      family,
+      src,
+      weight: /bold|black|heavy|demi|semibold/.test(lower) ? "700" : "400",
+      style: /italic|oblique|slanted/.test(lower) ? "italic" : "normal",
+    };
+  });
+}
+
+async function loadEmbeddedFonts(
+  fonts?: Record<string, string> | EmbeddedFontFace[],
+): Promise<void> {
+  if (typeof FontFace === "undefined") return;
+  await Promise.allSettled(normalizeFontFaces(fonts).map(async (face) => {
+    const cleaned = face.family.replace(/[^A-Za-z0-9 _-]/g, "").trim();
+    if (!cleaned) return;
+    const family = `${PREVIEW_FONT_PREFIX}${cleaned}`;
+    const weight = face.weight || "400";
+    const style = face.style || "normal";
+    const cacheKey = `${family}:${weight}:${style}:${face.src.length}:${face.src.slice(-24)}`;
+    if (loadedEmbeddedFonts.has(cacheKey)) return;
     const existing = loadingEmbeddedFonts.get(cacheKey);
     if (existing) return existing;
 
-    const lower = family.toLowerCase();
-    const pending = new FontFace(family, `url(${source})`, {
-      weight: /bold|black|heavy|demi|semibold/.test(lower) ? "700" : "400",
-      style: /italic|oblique|slanted/.test(lower) ? "italic" : "normal",
+    const pending = new FontFace(family, `url("${face.src}")`, {
+      weight,
+      style,
     }).load().then((loaded) => {
       document.fonts.add(loaded);
       loadedEmbeddedFonts.add(cacheKey);
@@ -110,6 +135,22 @@ function bboxToRect(
   const left = Math.min(...xs);
   const top  = Math.min(...ys);
   return { left, top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
+}
+
+function findExistingTextEdit(
+  edits: readonly TextEditEntry[],
+  spanIds: string[],
+): TextEditEntry | undefined {
+  if (spanIds.length === 0) return undefined;
+  const key = spanIds.join(",");
+  for (let i = edits.length - 1; i >= 0; i--) {
+    if (edits[i].spanIds.join(",") === key) return edits[i];
+  }
+  const wanted = new Set(spanIds);
+  for (let i = edits.length - 1; i >= 0; i--) {
+    if (edits[i].spanIds.some((id) => wanted.has(id))) return edits[i];
+  }
+  return undefined;
 }
 
 export default function SejdaEditor() {
@@ -287,7 +328,7 @@ export default function SejdaEditor() {
     }
     try {
       const buf = await selected.arrayBuffer();
-      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+      const doc = await pdfjsLib.getDocument({ data: buf, ...PDF_DOCUMENT_OPTIONS }).promise;
       setFile(selected);
       setPdfDoc(doc);
       thumbCache.current.clear();
@@ -491,9 +532,10 @@ export default function SejdaEditor() {
           insertY: targetSpans[0]?.baselineY ?? y1,
           runs,
           fontSize: targetSpans[0]?.size ?? 12,
-          fontName: targetSpans[0]?.fontName ?? "Arial",
+          fontName: targetSpans[0]?.fontName ?? "",
           bold: targetSpans[0]?.bold ?? false,
           italic: targetSpans[0]?.italic ?? false,
+          fontWeight: targetSpans[0]?.fontWeight,
           isLtr: targetSpans[0]?.isLtr ?? true,
           backgroundColor: targetSpans[0]?.backgroundColor ?? "#ffffff",
         }]])
@@ -915,6 +957,12 @@ export default function SejdaEditor() {
                             (activeSingleSpan ?? activeParaForEdit.lines[0]?.spans[0])?.size ?? 12
                           }
                           scale={scale}
+                          initialRuns={findExistingTextEdit(
+                            editorState.textEdits,
+                            activeSingleSpan
+                              ? (activeSingleSpan.memberSpanIds ?? [activeSingleSpan.spanId])
+                              : activeParaForEdit.spanIds,
+                          )?.newText}
                           onCommit={handleInlineCommit}
                           onDelete={() => handleInlineCommit([])}
                           onCancel={handleInlineCancel}

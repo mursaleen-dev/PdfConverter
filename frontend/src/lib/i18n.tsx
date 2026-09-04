@@ -16,8 +16,8 @@ export type Language = (typeof LANGUAGES)[number][0];
 type Messages = Record<string, string>;
 
 const en: Messages = {
-  "home.title": "Every tool you need for your files",
-  "home.subtitle": "Convert, organize, and manage your PDFs, in one place.",
+  "home.title": "Online PDF editor, converter, and merger",
+  "home.subtitle": "Edit text in place, convert files, and merge PDFs in the browser.",
   "common.all": "All",
   "common.convertPdf": "Convert PDF",
   "common.search": "Search tools...",

@@ -1,7 +1,9 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import LanguageSelector from "@/components/LanguageSelector";
+import SiteFooter from "@/components/SiteFooter";
 import { I18nProvider } from "@/lib/i18n";
+import { rootMetadata } from "@/lib/seo";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,9 +16,10 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: "File to PDF Converter",
-  description: "Convert JPG, PNG, BMP, WEBP, and DOCX files to PDF",
+export const metadata: Metadata = rootMetadata();
+
+export const viewport: Viewport = {
+  themeColor: "#18181b",
 };
 
 export default function RootLayout({
@@ -33,6 +36,7 @@ export default function RootLayout({
         <I18nProvider>
           <LanguageSelector />
           {children}
+          <SiteFooter />
         </I18nProvider>
       </body>
     </html>

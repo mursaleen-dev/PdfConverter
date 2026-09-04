@@ -43,42 +43,112 @@ import logging
 import statistics
 import unicodedata
 import base64
-import re
 from collections import Counter
 from typing import Any
 
 import fitz
-from app.text_span_utils import infer_font_style, split_mixed_direction_span
-from app.type3_fonts import type3_face_style
+from app.text_span_utils import split_mixed_direction_span
+from app.font_resolver import (
+    SourceFace,
+    _is_generic_family,
+    _try_system_font,
+    css_weight,
+    display_family,
+    source_face_style,
+)
+from app.routers.text_edit import _sample_bg_rgb
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 _MAX_EMBEDDED_FONT_BYTES = 4 * 1024 * 1024
+_PREVIEW_PANGGRAM = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+)
 
 
-def _extract_browser_fonts(page: fitz.Page) -> dict[str, str]:
-    """Expose page fonts to the inline editor for an exact visual preview."""
-    fonts: dict[str, str] = {}
+def _extract_browser_fonts(page: fitz.Page) -> list[dict[str, str]]:
+    """Send full family/weight faces so the on-page preview matches the saved PDF.
+
+    Type3 tickets have no extractable bytes, so the editor used to fall back to
+    Arial (or a faux-bold Regular). Load the same system family the rewrite path
+    uses, registered at the correct CSS weight.
+    """
+    faces: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
     total = 0
+
+    def add_face(family: str, weight: str, style: str, data: bytes, mime: str) -> None:
+        nonlocal total
+        key = (family.lower(), weight, style)
+        if not family or key in seen:
+            return
+        if not data or total + len(data) > _MAX_EMBEDDED_FONT_BYTES:
+            return
+        seen.add(key)
+        total += len(data)
+        faces.append({
+            "family": family,
+            "weight": weight,
+            "style": style,
+            "src": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}",
+        })
+
+    face_cache: dict[str, SourceFace] = {}
+    try:
+        raw = page.get_text("dict")
+    except Exception:
+        raw = {}
+    for block in raw.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                font_name = str(span.get("font", ""))
+                if font_name not in face_cache:
+                    face_cache[font_name] = source_face_style(
+                        page.parent, page, font_name, int(span.get("flags", 0))
+                    )
+                face = face_cache[font_name]
+                if not face.family or _is_generic_family(face.family):
+                    continue
+                weight = str(css_weight(face.weight))
+                style = "italic" if face.italic else "normal"
+                if (face.family.lower(), weight, style) in seen:
+                    continue
+                res = _try_system_font(
+                    face.family, face.bold, face.italic, _PREVIEW_PANGGRAM, face.weight
+                )
+                if res and res.fontbuffer:
+                    add_face(
+                        res.css_family or face.family,
+                        weight,
+                        style,
+                        res.fontbuffer,
+                        "font/ttf",
+                    )
+
     for entry in page.get_fonts(full=True):
         xref, basefont = int(entry[0]), str(entry[3])
         if xref <= 0:
             continue
-        family = re.sub(r"^[A-Z]{6}\+", "", basefont)
-        if family in fonts:
+        family = display_family(basefont)
+        if not family:
             continue
         try:
             _name, ext, _font_type, data = page.parent.extract_font(xref)
         except Exception:
             continue
-        if not data or total + len(data) > _MAX_EMBEDDED_FONT_BYTES:
+        if not data:
             continue
+        face = source_face_style(page.parent, page, basefont)
+        weight = str(css_weight(face.weight))
+        style = "italic" if face.italic else "normal"
         mime = "font/otf" if str(ext).lower() in {"otf", "cff"} else "font/ttf"
-        fonts[family] = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
-        total += len(data)
-    return fonts
+        add_face(face.family or family, weight, style, data, mime)
+
+    return faces
 
 
 MAX_FILE_MB = 50
@@ -193,6 +263,7 @@ def _coalesce_selection_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any
             and span.get("script") == previous.get("script")
             and span["bold"] == previous["bold"]
             and span["italic"] == previous["italic"]
+            and int(span.get("fontWeight", 400)) == int(previous.get("fontWeight", 400))
             and abs(float(span["baselineY"]) - float(previous["baselineY"])) <= 2.5
         )
         if same_style and gap <= max(3.0, size * 0.65):
@@ -241,35 +312,14 @@ def _coalesce_selection_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any
     return merged
 
 
-def _sample_background_color(
-    pix: fitz.Pixmap,
-    bbox: list[float],
-    page_w: float,
-    page_h: float,
-) -> str:
-    """Estimate the local fill around text without sampling its glyph pixels."""
-    x0, y0, x1, y1 = bbox
-    left = min(max(int(x0) - 3, 0), max(int(page_w) - 1, 0))
-    right = min(max(int(x1) + 3, left), max(int(page_w) - 1, 0))
-    top = min(max(int(y0), 0), max(int(page_h) - 1, 0))
-    bottom = min(max(int(y1), top), max(int(page_h) - 1, 0))
-    area = max(1, (right - left + 1) * (bottom - top + 1))
-    step = max(1, round((area / 20_000) ** 0.5))
-    samples = [
-        tuple(pix.pixel(x, y)[:3])
-        for y in range(top, bottom + 1, step)
-        for x in range(left, right + 1, step)
-    ]
-    if not samples:
-        return "#ffffff"
-    # The dominant color inside the text line is its cell/background fill.
-    # Glyphs and borders occupy fewer pixels and become minority colors.
-    quantized = [
-        tuple(min(255, round(channel / 8) * 8) for channel in sample)
-        for sample in samples
-    ]
-    rgb = Counter(quantized).most_common(1)[0][0]
-    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+def _sample_background_color(page: fitz.Page, bbox: list[float]) -> str:
+    """Local fill behind a span — same source the rewrite path uses on save."""
+    red, green, blue = _sample_bg_rgb(page, fitz.Rect(bbox))
+    return (
+        f"#{int(round(red * 255)):02x}"
+        f"{int(round(green * 255)):02x}"
+        f"{int(round(blue * 255)):02x}"
+    )
 
 
 def _modal_line_gap(line_bboxes: list[list[float]]) -> float:
@@ -327,7 +377,6 @@ def extract_page_data(
     )
     text_blocks = [b for b in raw.get("blocks", []) if b.get("type") == 0]
     scanned = len(text_blocks) == 0
-    page_pix = page.get_pixmap(matrix=fitz.Matrix(1, 1), colorspace=fitz.csRGB, alpha=False)
 
     # Fix 1: page-level word-gap median and derived column threshold (once per page)
     pg_median_wg = _page_word_gap(text_blocks, w)
@@ -369,11 +418,11 @@ def extract_page_data(
                     size = float(segment.get("size", 12))
                     color_int = int(segment.get("color", 0))
                     font_name = segment.get("font", "")
-                    bold, italic = infer_font_style(font_name, flags)
-                    type3_style = type3_face_style(page.parent, font_name, page)
-                    if type3_style is not None:
-                        bold = type3_style.weight >= 600
-                        italic = type3_style.italic
+                    face = source_face_style(page.parent, page, font_name, flags)
+                    bold, italic = face.bold, face.italic
+                    font_weight = css_weight(face.weight)
+                    if face.family:
+                        font_name = face.family
                     sbbox = list(segment.get("bbox", [0, 0, 0, 0]))
                     origin = list(segment.get("origin", [sbbox[0], sbbox[3]]))
                     asc_raw = float(segment.get("ascender", 0.83))
@@ -388,10 +437,9 @@ def extract_page_data(
                         "size":        round(size, 2),
                         "bold":        bold,
                         "italic":      italic,
+                        "fontWeight":  font_weight,
                         "color":       _color_to_hex(color_int),
-                        "backgroundColor": _sample_background_color(
-                            page_pix, sbbox, w, h
-                        ),
+                        "backgroundColor": _sample_background_color(page, sbbox),
                         "fontName":    font_name,
                         "script":      segment.get("_editScript", "UNKNOWN"),
                         "dir":         [1.0, 0.0] if direction == "ltr" else [-1.0, 0.0],

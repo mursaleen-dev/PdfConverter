@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import unicodedata
+from collections import Counter
 from typing import Any
 
 import fitz
@@ -20,8 +21,8 @@ import pymupdf_fonts
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-from app.font_resolver import FontResolution, resolve_font
-from app.text_span_utils import infer_font_style, split_mixed_direction_span
+from app.font_resolver import FontResolution, resolve_font, source_face_style
+from app.text_span_utils import split_mixed_direction_span
 from app.type3_fonts import (
     encode_with_type3,
     restore_type3_resources,
@@ -199,22 +200,114 @@ def _line_rect_from_span_ids(
     return rects
 
 
-def _sample_bg_rgb(page: fitz.Page, rect: fitz.Rect) -> tuple[float, float, float]:
-    """Sample a nearby pixel so leftover ink can be painted out with the local fill."""
-    if rect.y0 >= 3:
-        strip = fitz.Rect(rect.x0, max(rect.y0 - 3, 0), min(rect.x0 + 10, rect.x1), rect.y0)
-    elif rect.y1 + 3 <= page.rect.height:
-        strip = fitz.Rect(rect.x0, rect.y1, min(rect.x0 + 10, rect.x1), rect.y1 + 3)
-    else:
-        return (1.0, 1.0, 1.0)
+def _fill_rgb(fill: Any) -> tuple[float, float, float] | None:
+    if not fill:
+        return None
     try:
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=strip, colorspace=fitz.csRGB)
-        if pix.n >= 3 and pix.width > 0 and pix.height > 0:
-            r, g, b = pix.pixel(pix.width // 2, pix.height // 2)[:3]
-            return (r / 255.0, g / 255.0, b / 255.0)
+        red, green, blue = float(fill[0]), float(fill[1]), float(fill[2])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if max(red, green, blue) > 1.0:
+        red, green, blue = red / 255.0, green / 255.0, blue / 255.0
+    return (
+        max(0.0, min(1.0, red)),
+        max(0.0, min(1.0, green)),
+        max(0.0, min(1.0, blue)),
+    )
+
+
+def _point_in_rect(x: float, y: float, rect: fitz.Rect, pad: float = 0.5) -> bool:
+    return rect.x0 - pad <= x <= rect.x1 + pad and rect.y0 - pad <= y <= rect.y1 + pad
+
+
+def _vector_fill_behind(page: fitz.Page, rect: fitz.Rect) -> tuple[float, float, float] | None:
+    """Smallest filled drawing under the text — heading bars and table cells."""
+    cx = (rect.x0 + rect.x1) / 2
+    cy = (rect.y0 + rect.y1) / 2
+    page_area = float(page.rect.width * page.rect.height) or 1.0
+    matches: list[tuple[float, tuple[float, float, float]]] = []
+    try:
+        drawings = page.get_drawings()
     except Exception:
-        pass
-    return (1.0, 1.0, 1.0)
+        return None
+    for drawing in drawings:
+        rgb = _fill_rgb(drawing.get("fill"))
+        if rgb is None:
+            continue
+        opacity = drawing.get("fill_opacity")
+        if opacity is not None and float(opacity) <= 0.01:
+            continue
+        found_item = False
+        for item in drawing.get("items") or []:
+            if not item or item[0] != "re" or len(item) < 2:
+                continue
+            try:
+                item_rect = fitz.Rect(item[1])
+            except Exception:
+                continue
+            area = float(item_rect.width * item_rect.height)
+            if area <= 8 or area > page_area * 0.5:
+                continue
+            if _point_in_rect(cx, cy, item_rect):
+                matches.append((area, rgb))
+                found_item = True
+        if found_item:
+            continue
+        try:
+            draw_rect = fitz.Rect(drawing.get("rect"))
+        except Exception:
+            continue
+        area = float(draw_rect.width * draw_rect.height)
+        if draw_rect.width < 8 or draw_rect.height < 4 or area > page_area * 0.5:
+            continue
+        if _point_in_rect(cx, cy, draw_rect):
+            matches.append((area, rgb))
+    if not matches:
+        return None
+    matches.sort(key=lambda item: item[0])
+    return matches[0][1]
+
+
+def _dominant_clip_rgb(page: fitz.Page, rect: fitz.Rect) -> tuple[float, float, float]:
+    """Mode of pixels inside the text box — never the page above a heading bar."""
+    pad_x = min(1.5, max(0.0, rect.width * 0.08))
+    pad_y = min(1.5, max(0.0, rect.height * 0.15))
+    inset = fitz.Rect(rect.x0 + pad_x, rect.y0 + pad_y, rect.x1 - pad_x, rect.y1 - pad_y)
+    if inset.is_empty or inset.width < 1 or inset.height < 1:
+        inset = fitz.Rect(rect)
+    try:
+        pix = page.get_pixmap(
+            matrix=fitz.Matrix(2, 2),
+            clip=inset,
+            colorspace=fitz.csRGB,
+            alpha=False,
+        )
+    except Exception:
+        return (1.0, 1.0, 1.0)
+    if pix.n < 3 or pix.width <= 0 or pix.height <= 0:
+        return (1.0, 1.0, 1.0)
+    step = max(1, min(pix.width, pix.height) // 12)
+    samples = [
+        tuple(pix.pixel(x, y)[:3])
+        for y in range(0, pix.height, step)
+        for x in range(0, pix.width, step)
+    ]
+    if not samples:
+        return (1.0, 1.0, 1.0)
+    quantized = [
+        tuple(min(255, round(channel / 8) * 8) for channel in sample)
+        for sample in samples
+    ]
+    red, green, blue = Counter(quantized).most_common(1)[0][0]
+    return (red / 255.0, green / 255.0, blue / 255.0)
+
+
+def _sample_bg_rgb(page: fitz.Page, rect: fitz.Rect) -> tuple[float, float, float]:
+    """Local fill behind text: vector cell/heading first, then pixels inside the box."""
+    vector = _vector_fill_behind(page, rect)
+    if vector is not None:
+        return vector
+    return _dominant_clip_rgb(page, rect)
 
 
 def _point_xy(value: Any) -> tuple[float, float] | None:
@@ -682,11 +775,9 @@ def apply_text_edits(
             dom_size = float(first_span.get("size", 12))
             font_name = first_span.get("font", "")
             flags = int(first_span.get("flags", 0))
-            bold, italic = infer_font_style(font_name, flags)
+            face = source_face_style(orig_doc, orig_page, font_name, flags)
+            bold, italic = face.bold, face.italic
             type3_style = type3_face_style(orig_doc, font_name, orig_page)
-            if type3_style is not None:
-                bold = type3_style.weight >= 600
-                italic = type3_style.italic
             all_new_text = _extract_all_text(new_text_runs)
             right_to_left = _is_rtl_text(all_new_text)
 
@@ -712,7 +803,14 @@ def apply_text_edits(
             if type3_runs is None:
                 try:
                     font_res = resolve_font(
-                        orig_doc, orig_page, font_name, bold, italic, all_new_text
+                        orig_doc,
+                        orig_page,
+                        font_name,
+                        bold,
+                        italic,
+                        all_new_text,
+                        source_family=face.family,
+                        weight=face.weight,
                     )
                 except ValueError as exc:
                     raise HTTPException(status_code=422, detail=str(exc))
@@ -795,7 +893,13 @@ def apply_text_edits(
                 if len(sid.rsplit(":", 3)) == 4
             }
             single_line = len(source_lines) == 1
-            if single_line and fitz_font is not None:
+            # Family-matched substitutes (embedded or system TTF) already share
+            # the source metrics. Recentering them against Helvetica-style
+            # ascenders makes edited text look oversized next to neighbors.
+            keep_origin_baseline = type3_runs is not None or (
+                font_res is not None and font_res.tier == "A"
+            )
+            if single_line and fitz_font is not None and not keep_origin_baseline:
                 baseline_y = _visually_aligned_baseline(
                     new_text_runs,
                     dom_size,
@@ -936,10 +1040,10 @@ async def preflight_edit(
     page = doc[source_index]
     all_text = _extract_all_text(runs)
 
+    face = source_face_style(doc, page, font_name)
+    is_bold = is_bold or face.bold
+    is_italic = is_italic or face.italic
     type3_style = type3_face_style(doc, font_name, page)
-    if type3_style is not None:
-        is_bold = type3_style.weight >= 600
-        is_italic = type3_style.italic
 
     type3_width = 0.0
     used_type3 = False
@@ -962,7 +1066,16 @@ async def preflight_edit(
         fitz_font = None
     else:
         try:
-            font_res = resolve_font(doc, page, font_name, is_bold, is_italic, all_text)
+            font_res = resolve_font(
+                doc,
+                page,
+                font_name,
+                is_bold,
+                is_italic,
+                all_text,
+                source_family=face.family,
+                weight=face.weight,
+            )
         except ValueError as exc:
             doc.close()
             return JSONResponse(content={

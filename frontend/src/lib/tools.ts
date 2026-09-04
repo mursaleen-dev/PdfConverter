@@ -28,7 +28,7 @@ export const tools: Tool[] = [
   {
     id: "merge-pdf",
     title: "Merge PDF",
-    description: "Combine multiple PDF files into one document.",
+    description: "Combine PDFs into one file and keep page order.",
     category: "organize",
     implemented: true,
     href: "/merge-pdf",
@@ -38,7 +38,7 @@ export const tools: Tool[] = [
   {
     id: "edit-pdf",
     title: "Edit PDF",
-    description: "Add text, stamps, and signatures to a PDF.",
+    description: "Replace PDF text in place and keep the original font when possible.",
     category: "edit",
     implemented: true,
     href: "/edit-pdf",

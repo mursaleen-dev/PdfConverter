@@ -88,6 +88,7 @@ export interface ExtractedSpan {
   size: number;            // font size in PDF points
   bold: boolean;
   italic: boolean;
+  fontWeight?: number;     // CSS/PDF numeric weight (400, 500, 600, 700, …)
   color: string;           // "#rrggbb"
   backgroundColor: string; // estimated local PDF background behind the span
   fontName: string;        // original embedded font name
@@ -112,13 +113,20 @@ export interface ExtractedParagraph {
   spanIds: string[];  // all spanIds within this paragraph
 }
 
+export interface EmbeddedFontFace {
+  family: string;
+  src: string;
+  weight?: string;
+  style?: string;
+}
+
 export interface ExtractedPage {
   pageId: string;
   sourceIndex: number;
   width: number;
   height: number;
   scanned: boolean;
-  fonts?: Record<string, string>; // embedded source fonts as browser data URLs
+  fonts?: Record<string, string> | EmbeddedFontFace[];
   paragraphs: ExtractedParagraph[];
 }
 

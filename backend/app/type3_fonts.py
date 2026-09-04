@@ -141,19 +141,31 @@ def encode_with_type3(
     if not dest_fonts:
         return None
 
+    # Resource names can change after a page rebuild. Remap onto the dest
+    # font that is the same face *and* the same weight. Chrome names every
+    # Noto subset "NotoSans-Regular", so matching on face/name alone would
+    # overwrite Bold with Regular and strip the original style.
     dest_match = next((font for font in dest_fonts if font.resource == source.resource), None)
+    if dest_match is None and source.fd_xref:
+        dest_match = next(
+            (font for font in dest_fonts if font.fd_xref == source.fd_xref),
+            None,
+        )
     if dest_match is None:
-        dest_match = next((font for font in dest_fonts if font.face == source.face), None)
+        dest_match = next(
+            (font for font in dest_fonts if _same_face(font, source)),
+            None,
+        )
     if dest_match is not None:
         source = Type3FaceStyle(
             family=dest_match.family or source.family,
             face=dest_match.face or source.face,
-            weight=dest_match.weight or source.weight,
-            italic=dest_match.italic,
+            weight=source.weight,
+            italic=source.italic,
             resource=dest_match.resource,
             xref=dest_match.xref,
             flip_y=dest_match.flip_y,
-            fd_xref=dest_match.fd_xref,
+            fd_xref=source.fd_xref or dest_match.fd_xref,
         )
 
     glyphs: list[Type3Glyph] = []
@@ -349,12 +361,38 @@ def _load_page_type3_fonts(doc: fitz.Document, page: fitz.Page) -> list[_Type3Fo
     return fonts
 
 
+def _weight_band(weight: int) -> str:
+    """Group CSS/PDF weights so Regular is never mixed with Bold."""
+    if weight >= 650:
+        return "bold"
+    if weight >= 500:
+        return "medium"
+    return "regular"
+
+
+def _same_face(font: _Type3Font, source: Type3FaceStyle) -> bool:
+    if source.family and font.family:
+        if font.family.lower() != source.family.lower():
+            return False
+    elif source.face and font.face and font.face != source.face:
+        return False
+    if font.italic != source.italic:
+        return False
+    return _weight_band(font.weight) == _weight_band(source.weight)
+
+
 def _pick_glyph(
     char: str,
     fonts: list[_Type3Font],
     source: Type3FaceStyle,
 ) -> Type3Glyph | None:
-    ranked = sorted(fonts, key=lambda font: _face_rank(font, source))
+    # Chrome HTML-to-PDF names every Noto Sans subset "NotoSans-Regular"
+    # even when FontWeight is 700. Never borrow a lighter/heavier subset
+    # just because it happens to contain the missing letter.
+    ranked = sorted(
+        (font for font in fonts if _same_face(font, source)),
+        key=lambda font: _face_rank(font, source),
+    )
     for font in ranked:
         glyph = font.glyphs.get(char)
         if glyph is None:
@@ -370,19 +408,11 @@ def _pick_glyph(
 
 
 def _face_rank(font: _Type3Font, source: Type3FaceStyle) -> tuple[int, int, int]:
-    """Lower is better: exact face, then family+weight, then family, then any."""
-    face_match = int(font.face != source.face)
-    family_match = int(font.family.lower() != source.family.lower()) if source.family else 1
+    """Lower is better: original subset, then same descriptor, then closer weight."""
+    same_resource = int(font.resource != source.resource)
+    same_fd = int(source.fd_xref != 0 and font.fd_xref != source.fd_xref)
     weight_delta = abs(font.weight - source.weight)
-    italic_mismatch = int(font.italic != source.italic)
-    if not face_match:
-        same_fd = int(source.fd_xref != 0 and font.fd_xref != source.fd_xref)
-        return (0, same_fd, int(font.resource != source.resource) + italic_mismatch)
-    if not family_match and italic_mismatch == 0:
-        return (1, weight_delta, 0)
-    if not family_match:
-        return (2, weight_delta + 100 * italic_mismatch, 0)
-    return (3, weight_delta + 100 * italic_mismatch, 0)
+    return (same_resource, same_fd, weight_delta)
 
 
 def snapshot_type3_resources(page: fitz.Page, resource_names: set[str]) -> dict[str, int]:

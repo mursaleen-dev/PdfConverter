@@ -95,7 +95,7 @@ export default function MergeFlow() {
   };
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-zinc-50 px-4 font-sans dark:bg-black">
+    <div className="flex flex-col items-center bg-transparent px-4 py-10 font-sans">
       <main className="flex w-full max-w-md flex-col items-center gap-6 rounded-2xl border border-neutral-200 bg-white p-8 shadow-sm dark:border-neutral-800 dark:bg-neutral-950">
         <Link
           href="/"

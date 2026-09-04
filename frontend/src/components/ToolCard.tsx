@@ -23,9 +23,9 @@ export default function ToolCard({ tool }: ToolCardProps) {
   const body = (
     <>
       {iconEl}
-      <h3 className="mt-4 text-base font-semibold text-neutral-900 dark:text-neutral-50">
+      <h2 className="mt-4 text-base font-semibold text-neutral-900 dark:text-neutral-50">
         {t(`tool.${tool.id}`, tool.title)}
-      </h3>
+      </h2>
       <p className="mt-1.5 text-sm leading-snug text-neutral-500 dark:text-neutral-400">
         {language === "en" ? tool.description : t("common.toolDescription")}
       </p>

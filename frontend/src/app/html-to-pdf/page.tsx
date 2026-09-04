@@ -1,11 +1,13 @@
-import type { Metadata } from "next";
 import UrlConvertFlow from "@/components/UrlConvertFlow";
+import ToolPageShell from "@/components/ToolPageShell";
+import { toolPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "HTML to PDF",
-  description: "Convert a webpage to PDF from its URL.",
-};
+export const metadata = toolPageMetadata("html-to-pdf");
 
 export default function HtmlToPdfPage() {
-  return <UrlConvertFlow />;
+  return (
+    <ToolPageShell toolId="html-to-pdf">
+      <UrlConvertFlow />
+    </ToolPageShell>
+  );
 }

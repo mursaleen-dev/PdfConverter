@@ -7,6 +7,25 @@ import type {
   ExtractedSpan,
   TextRun,
 } from "./types";
+import { cssFontStack, cssFontWeight } from "./previewFonts";
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderRunsAsHtml(runs: TextRun[], source: ExtractedSpan): string {
+  const stack = cssFontStack(source.fontName);
+  const direction = source.isLtr ? "ltr" : "rtl";
+  return runs.map((run) => {
+    const fw = run.bold ? 700 : cssFontWeight(source);
+    const fs = run.italic || source.italic ? "italic" : "normal";
+    const color = run.color || source.color;
+    return run.text.split("\n").map((part, index, parts) => {
+      const html = `<span dir="${direction}" style="font-family:${stack};font-weight:${fw};font-style:${fs};font-synthesis:none;color:${color};unicode-bidi:isolate">${escapeHtml(part)}</span>`;
+      return index < parts.length - 1 ? `${html}<br>` : html;
+    }).join("");
+  }).join("");
+}
 
 interface InlineEditorProps {
   para: ExtractedParagraph;
@@ -14,6 +33,7 @@ interface InlineEditorProps {
   rect: { left: number; top: number; width: number; height: number };
   domSize: number;    // dominant font size in pts × scale → px for CSS
   scale: number;
+  initialRuns?: TextRun[] | null;
   onCommit: (runs: TextRun[]) => void;
   onDelete: () => void;
   onCancel: () => void;
@@ -28,13 +48,6 @@ function rgbStringToHex(rgb: string): string {
   const g = parseInt(m[2]).toString(16).padStart(2, "0");
   const b = parseInt(m[3]).toString(16).padStart(2, "0");
   return `#${r}${g}${b}`;
-}
-
-function cleanFontFamily(fontName: string): string {
-  return fontName
-    .replace(/^[A-Z]{6}\+/, "")
-    .replace(/[^A-Za-z0-9 _-]/g, "")
-    .trim();
 }
 
 function domToRuns(el: HTMLElement): TextRun[] {
@@ -101,14 +114,23 @@ function domToRuns(el: HTMLElement): TextRun[] {
 
 // ── Pre-fill HTML ─────────────────────────────────────────────────────────────
 
-function buildInitialHTML(para: ExtractedParagraph, singleSpan: ExtractedSpan | null): string {
+function buildInitialHTML(
+  para: ExtractedParagraph,
+  singleSpan: ExtractedSpan | null,
+  initialRuns?: TextRun[] | null,
+): string {
+  const source = singleSpan ?? para.lines[0]?.spans[0];
+  if (initialRuns && source) {
+    return renderRunsAsHtml(initialRuns, source);
+  }
+
   const renderSpan = (s: ExtractedSpan, textValue = s.text) => {
-      const text = textValue.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      const family = cleanFontFamily(s.fontName);
-      const fw = s.bold ? "bold" : "normal";
+      const text = escapeHtml(textValue);
+      const stack = cssFontStack(s.fontName);
+      const fw = cssFontWeight(s);
       const fs = s.italic ? "italic" : "normal";
       const direction = s.isLtr ? "ltr" : "rtl";
-      return `<span dir="${direction}" style="font-family:'${family}';font-weight:${fw};font-style:${fs};color:${s.color};unicode-bidi:isolate">${text}</span>`;
+      return `<span dir="${direction}" style="font-family:${stack};font-weight:${fw};font-style:${fs};font-synthesis:none;color:${s.color};unicode-bidi:isolate">${text}</span>`;
   };
 
   if (singleSpan) return renderSpan(singleSpan);
@@ -138,16 +160,18 @@ export default function InlineEditor({
   rect,
   domSize,
   scale,
+  initialRuns,
   onCommit,
   onDelete,
   onCancel,
 }: InlineEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
   // Initialise content and move cursor to end
   useEffect(() => {
     if (!editorRef.current) return;
-    editorRef.current.innerHTML = buildInitialHTML(para, singleSpan);
+    editorRef.current.innerHTML = buildInitialHTML(para, singleSpan, initialRuns);
     const range = document.createRange();
     range.selectNodeContents(editorRef.current);
     range.collapse(false);
@@ -155,7 +179,7 @@ export default function InlineEditor({
     sel?.removeAllRanges();
     sel?.addRange(range);
     editorRef.current.focus();
-  }, [para, singleSpan]);
+  }, [para, singleSpan, initialRuns]);
 
   const commit = useCallback(() => {
     if (!editorRef.current) return;
@@ -166,6 +190,20 @@ export default function InlineEditor({
     }
     onCommit(rawRuns);
   }, [onCommit, onCancel]);
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const root = wrapperRef.current;
+      if (!root) return;
+      if (event.target instanceof Node && root.contains(event.target)) return;
+      event.stopPropagation();
+      commitRef.current();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
@@ -184,7 +222,7 @@ export default function InlineEditor({
   // small source text as soon as the inline editor opened.
   const displaySize = domSize * scale;
   const sourceSpan = singleSpan ?? para.lines[0]?.spans[0];
-  const sourceFamily = cleanFontFamily(sourceSpan?.fontName ?? "");
+  const sourceFamily = cssFontStack(sourceSpan?.fontName ?? "");
   const editorWidth = Math.max(rect.width, 200);
   const editorLeft = sourceSpan?.isLtr === false
     ? rect.left + rect.width - editorWidth
@@ -192,6 +230,7 @@ export default function InlineEditor({
 
   return (
     <div
+      ref={wrapperRef}
       className="absolute z-30 shadow-xl"
       style={{ left: editorLeft, top: rect.top, width: editorWidth }}
     >
@@ -231,9 +270,10 @@ export default function InlineEditor({
         className="min-h-[1.5em] w-full overflow-hidden rounded-lg border border-neutral-200 bg-white/95 px-0 py-0 outline-none focus:border-blue-400 dark:border-neutral-700 dark:bg-neutral-900/95"
         style={{
           fontSize: displaySize,
-          fontFamily: sourceFamily ? `"${sourceFamily}", Arial, sans-serif` : undefined,
-          fontWeight: sourceSpan?.bold ? 700 : 400,
+          fontFamily: sourceFamily,
+          fontWeight: cssFontWeight(sourceSpan),
           fontStyle: sourceSpan?.italic ? "italic" : "normal",
+          fontSynthesis: "none",
           color: sourceSpan?.color,
           direction: sourceSpan?.isLtr === false ? "rtl" : "ltr",
           lineHeight: `${rect.height}px`,
